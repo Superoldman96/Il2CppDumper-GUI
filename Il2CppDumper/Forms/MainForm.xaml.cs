@@ -93,6 +93,19 @@ namespace Il2CppDumper
             headerToBinjaChkBox.IsChecked = Settings.Default.il2cpp_header_to_binja;
             headerToGhidraChkBox.IsChecked = Settings.Default.il2cpp_header_to_ghidra;
 
+            genDumpCsChkBox.IsChecked = Settings.Default.GenDumpCs;
+            genStructChkBox.IsChecked = Settings.Default.GenStructFiles;
+            genDummyDllChkBox.IsChecked = Settings.Default.GenDummyDll;
+            fastModeChkBox.IsChecked = Settings.Default.FastMode;
+            threadsCombo.SelectedIndex = Settings.Default.WorkerThreads switch
+            {
+                1 => 1,
+                2 => 2,
+                4 => 3,
+                8 => 4,
+                _ => 0,
+            };
+
             //Check admin
             bool isAdmin = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             if (isAdmin)
@@ -132,6 +145,13 @@ namespace Il2CppDumper
             var metadataBytes = File.ReadAllBytes(metadataPath);
             metadata = new Metadata(new MemoryStream(metadataBytes));
             Log($"Metadata Version: {metadata.Version}");
+            var unityRange = UnityVersionMap.GetUnityVersionRange(metadata.Version);
+            Log($"Detected Unity Version: {unityRange}",
+                UnityVersionMap.IsUnity6Plus(metadata.Version) ? Brushes.Lime : Brushes.LightGreen);
+            if (metadata.Version >= 38)
+            {
+                Log("Unity 6 metadata detected - using variable-width index mode", Brushes.Lime);
+            }
             Log("Initializing il2cpp file...");
             var il2cppBytes = File.ReadAllBytes(il2cppPath);
             var il2cppMagic = BitConverter.ToUInt32(il2cppBytes, 0);
@@ -276,27 +296,40 @@ namespace Il2CppDumper
         private void Dump(Metadata metadata, Il2Cpp il2Cpp, string outputDir)
         {
             Log("Output path: " + outputDir);
-            Log("Dumping... ");
+            // Read performance/output options (saved to Settings before the dump task starts).
+            var optGenDumpCs = Settings.Default.GenDumpCs;
+            var optGenStruct = Settings.Default.GenStructFiles;
+            var optGenDummyDll = Settings.Default.GenDummyDll;
+            var optFastMode = Settings.Default.FastMode;
+            var optWorkerThreads = Settings.Default.WorkerThreads;
             var executor = new Il2CppExecutor(metadata, il2Cpp);
-            var decompiler = new Il2CppDecompiler(executor);
-            decompiler.Decompile(config, outputDir);
-
-            Log("Done!", Brushes.Chartreuse);
-            if (config.GenerateStruct)
+            if (optGenDumpCs)
+            {
+                Log("Dumping... ");
+                var decompiler = new Il2CppDecompiler(executor);
+                decompiler.Decompile(config, outputDir);
+                Log("Done!", Brushes.Chartreuse);
+            }
+            else
+            {
+                Log("Skipping dump.cs (disabled in settings)", Brushes.Khaki);
+            }
+            if (config.GenerateStruct && optGenStruct)
             {
                 Log("Generate struct...");
                 try
                 {
                     var scriptGenerator = new StructGenerator(executor);
-                    scriptGenerator.WriteScript(outputDir);
+                    scriptGenerator.WriteScript(outputDir, optFastMode, optWorkerThreads);
                     Log("Done!", Brushes.Chartreuse);
                 }
                 catch (Exception ex)
                 {
                     Log("There was an error trying to generate struct: " + ex.Message, Brushes.Orange);
+                    Log(ex.ToString(), Brushes.Orange);
                 }
             }
-            if (config.GenerateDummyDll)
+            if (config.GenerateDummyDll && optGenDummyDll)
             {
                 try
                 {
@@ -306,7 +339,8 @@ namespace Il2CppDumper
                 }
                 catch (Exception ex)
                 {
-                    Log("There was an error trying to generate struct: " + ex.Message, Brushes.Orange);
+                    Log("There was an error trying to generate dummy dll: " + ex.Message, Brushes.Orange);
+                    Log(ex.ToString(), Brushes.Orange);
                 }
                 Directory.SetCurrentDirectory(basePath); //Fix read-only directory permission
             }
@@ -735,6 +769,16 @@ namespace Il2CppDumper
         #endregion
 
         #region Save Config
+        private int GetSelectedWorkerThreads()
+        {
+            if (threadsCombo.SelectedItem is System.Windows.Controls.ComboBoxItem item &&
+                int.TryParse(item.Tag?.ToString(), out var n))
+            {
+                return n;
+            }
+            return 0;
+        }
+
         private void SaveConfig()
         {
             Settings.Default.BinaryFileTxtBox = binFileTxtBox.Text;
@@ -758,6 +802,12 @@ namespace Il2CppDumper
             Settings.Default.ida_with_struct_py3 = (bool)idaStructPy3ChkBox.IsChecked;
             Settings.Default.il2cpp_header_to_binja = (bool)headerToBinjaChkBox.IsChecked;
             Settings.Default.il2cpp_header_to_ghidra = (bool)headerToGhidraChkBox.IsChecked;
+
+            Settings.Default.GenDumpCs = (bool)genDumpCsChkBox.IsChecked;
+            Settings.Default.GenStructFiles = (bool)genStructChkBox.IsChecked;
+            Settings.Default.GenDummyDll = (bool)genDummyDllChkBox.IsChecked;
+            Settings.Default.FastMode = (bool)fastModeChkBox.IsChecked;
+            Settings.Default.WorkerThreads = GetSelectedWorkerThreads();
 
             Settings.Default.Save();
         }
